@@ -1,6 +1,6 @@
 import express from "express"
 import multer from "multer"
-import { fileRelatedResponseGenerator } from "../controllers/chat.controller.js"
+import { askFromPDF, fileRelatedResponseGenerator } from "../controllers/chat.controller.js"
 
 const router = express.Router()
 
@@ -11,6 +11,8 @@ const upload = multer({
 
 
 router.post("/send", upload.single("file"), fileRelatedResponseGenerator)
+
+router.post("/ask", askFromPDF)
 
 
 
