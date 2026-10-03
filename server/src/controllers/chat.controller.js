@@ -32,7 +32,7 @@ const model = new ChatGoogle({
   apiKey: process.env.GOOGLE_API_KEY
 });
 
-export const fileRelatedResponseGenerator = async (req, res) => {
+export const createFile = async (req, res) => {
   try {
     // 1. Check file
     if (!req.file) {
@@ -65,8 +65,8 @@ export const fileRelatedResponseGenerator = async (req, res) => {
 
     console.log("Uploaded to ImageKit:", uploadResult.url);
 
-    // 5. Download PDF from ImageKit
-    const pdfResponse = await fetch(uploadResult.url);
+    const file = await 
+    const pdfResponse = 
 
     if (!pdfResponse.ok) {
       throw new Error("Failed to download PDF from ImageKit");
