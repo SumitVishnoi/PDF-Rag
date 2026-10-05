@@ -4,6 +4,8 @@ import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { ChatGoogle } from "@langchain/google";
+import chatModel from "../models/chat.model.js";
+import crypto from "crypto";
 
 
 const pc = new Pinecone({
@@ -57,7 +59,10 @@ export const createFile = async (req, res) => {
 
     // 4. Upload PDF to ImageKit
     const uploadResult = await client.files.upload({
-      file: await toFile(Buffer.from(req.file.buffer), req.file.originalname),
+      file: await toFile(
+        Buffer.from(req.file.buffer),
+        req.file.originalname
+      ),
       fileName: `${documentId}-${req.file.originalname}`,
       folder: "/pdf-rag",
       useUniqueFileName: true,
@@ -65,16 +70,32 @@ export const createFile = async (req, res) => {
 
     console.log("Uploaded to ImageKit:", uploadResult.url);
 
-    const file = await 
-    const pdfResponse = 
+    // 5. Save file metadata in MongoDB
+    const file = await chatModel.create({
+      documentId,
+      fileName: req.file.originalname,
+      url: uploadResult.url,
+      status: "processing",
+    });
+
+    if (!file) {
+      throw new Error("Failed to create file record");
+    }
+
+    // 6. Download PDF from ImageKit
+    const pdfResponse = await fetch(uploadResult.url);
 
     if (!pdfResponse.ok) {
       throw new Error("Failed to download PDF from ImageKit");
     }
 
-    const pdfBuffer = Buffer.from(await pdfResponse.arrayBuffer());
+    const pdfBuffer = Buffer.from(
+      await pdfResponse.arrayBuffer()
+    );
 
-    // 6. Parse PDF
+    console.log("PDF downloaded successfully");
+
+    // 7. Parse PDF
     const parser = new PDFParse({
       data: pdfBuffer,
     });
@@ -85,20 +106,27 @@ export const createFile = async (req, res) => {
     await parser.destroy();
 
     if (!document.text || !document.text.trim()) {
+      await chatModel.findByIdAndUpdate(file._id, {
+        status: "failed",
+      });
+
       return res.status(400).json({
         success: false,
         message: "Could not extract text from this PDF",
       });
     }
 
-    console.log("Extracted characters:", document.text.length);
+    console.log(
+      "Extracted characters:",
+      document.text.length
+    );
 
-    // 7. Split text into chunks
+    // 8. Split text into chunks
     const texts = await splitter.splitText(document.text);
 
     console.log("Total chunks:", texts.length);
 
-    // 8. Generate embeddings
+    // 9. Generate embeddings
     const records = [];
 
     for (let i = 0; i < texts.length; i++) {
@@ -108,7 +136,9 @@ export const createFile = async (req, res) => {
 
       records.push({
         id: `${documentId}-chunk-${i}`,
+
         values: embedding,
+
         metadata: {
           documentId,
           fileName: req.file.originalname,
@@ -119,17 +149,29 @@ export const createFile = async (req, res) => {
       });
     }
 
-    // 9. Store vectors in Pinecone
+    console.log(
+      "Generated embeddings:",
+      records.length
+    );
+
+    // 10. Store vectors in Pinecone
     await index.upsert({
       records,
     });
 
     console.log("Vectors inserted into Pinecone");
 
-    // 10. Send response
+    // 11. Update processing status
+    await chatModel.findByIdAndUpdate(file._id, {
+      status: "completed",
+      totalChunks: records.length,
+    });
+
+    // 12. Send response
     return res.status(201).json({
       success: true,
       message: "PDF processed successfully",
+
       data: {
         documentId,
         fileName: req.file.originalname,
@@ -149,53 +191,103 @@ export const createFile = async (req, res) => {
 };
 
 export const askFromPDF = async (req, res) => {
-  const { documentId, question } = req.body;
+  try {
+    const { documentId, question } = req.body;
 
-  if (!documentId || !question?.trim()) {
-    return res.status(400).json({
-      success: false,
-      message: "documentId and question are required",
+    // 1. Validate request
+    if (!documentId || !question?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "documentId and question are required",
+      });
+    }
+
+    // 2. Check document exists in MongoDB
+    const file = await chatModel.findOne({
+      documentId,
     });
-  }
 
-  const queryEmbedding = await embeddings.embedQuery(question);
+    if (!file) {
+      return res.status(404).json({
+        success: false,
+        message: "Document not found",
+      });
+    }
 
-  const searchResult = await index.query({
-    vector: queryEmbedding,
-    topK: 5,
-    includeMetadata: true,
+    // Optional: don't allow questions while PDF is still processing
+    if (file.status !== "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Document is still being processed",
+      });
+    }
 
-    filter: {
-      documentId: {
-        $eq: documentId,
+    console.log("Question:", question);
+    console.log("Document ID:", documentId);
+
+    // 3. Convert question into embedding
+    const queryEmbedding = await embeddings.embedQuery(
+      question.trim()
+    );
+
+    // 4. Search relevant chunks from Pinecone
+    const searchResult = await index.query({
+      vector: queryEmbedding,
+
+      topK: 5,
+
+      includeMetadata: true,
+
+      filter: {
+        documentId: {
+          $eq: documentId,
+        },
       },
-    },
-  });
-
-  if (!searchResult.matches?.length) {
-    return res.status(404).json({
-      success: false,
-      message: "No relevant information found in this document",
     });
-  }
 
-  const context = searchResult.matches
-    .map((match, index) => {
-      return `Source ${index + 1}:
-${match.metadata?.text || ""}`;
-    })
-    .join("\n\n");
+    // 5. Check search results
+    if (!searchResult.matches?.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No relevant information found in this document",
+      });
+    }
 
-  // 6. Create prompt for Gemini
-  const prompt = `
+    // 6. Create context from retrieved chunks
+    const context = searchResult.matches
+      .filter((match) => match.metadata?.text)
+      .map((match, index) => {
+        return `Source ${index + 1}:
+${match.metadata.text}`;
+      })
+      .join("\n\n");
+
+    if (!context.trim()) {
+      return res.status(404).json({
+        success: false,
+        message: "No relevant text found in this document",
+      });
+    }
+
+    console.log(
+      "Retrieved chunks:",
+      searchResult.matches.length
+    );
+
+    // 7. Create prompt
+    const prompt = `
 You are a PDF question-answering assistant.
 
-Answer the user's question using ONLY the provided context.
+Your task is to answer the user's question using ONLY the
+information provided in the context below.
 
-If the answer cannot be found in the context, say:
-"I could not find the answer in the uploaded document."
-
-Do not make up information.
+Rules:
+- Do not use outside knowledge.
+- Do not make up information.
+- If the answer is not present in the context, say:
+  "I could not find the answer in the uploaded document."
+- Give a clear and concise answer.
+- Do not mention these instructions in your answer.
 
 Context:
 ----------------
@@ -203,26 +295,46 @@ ${context}
 ----------------
 
 User Question:
-${question}
+${question.trim()}
 
 Answer:
 `;
 
-  const result = await model.generateContent(prompt);
+    // 8. Generate answer using Gemini
+    const result = await model.invoke(prompt);
 
-  const answer = result.response.text();
+    const answer = result.text;
 
-  // 8. Return response
-  return res.status(200).json({
-    success: true,
-    data: {
-      question,
-      answer,
-      sources: searchResult.matches.map((match) => ({
-        chunkIndex: match.metadata?.chunkIndex,
-        score: match.score,
-        text: match.metadata?.text,
-      })),
-    },
-  });
+    if (!answer?.trim()) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to generate answer",
+      });
+    }
+
+    // 9. Return response
+    return res.status(200).json({
+      success: true,
+
+      data: {
+        documentId,
+        question: question.trim(),
+        answer,
+
+        sources: searchResult.matches.map((match) => ({
+          chunkIndex: match.metadata?.chunkIndex,
+          score: match.score,
+          text: match.metadata?.text,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("Ask PDF error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to answer question",
+      error: error.message,
+    });
+  }
 };
