@@ -20,6 +20,8 @@ import {
   Menu,
   Paperclip,
 } from "lucide-react";
+import { useChat } from "../hook/useChat";
+import { initializedSocketConnection } from "../service/chat.socket";
 
 const suggestions = [
   {
@@ -68,6 +70,7 @@ export default function Dashboard() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [attachedFile, setAttachedFile] = useState(null);
+  const {handleChat, handleAskQuery} = useChat()
 
   const inputRef = useRef(null);
   const bottomRef = useRef(null);
@@ -98,7 +101,6 @@ export default function Dashboard() {
     if (!content && !attachedFile) return;
 
     const userMessage = {
-      id: Date.now(),
       role: "user",
       content:
         content +
@@ -108,7 +110,6 @@ export default function Dashboard() {
     let chatId = activeChat;
 
     if (!chatId) {
-      chatId = Date.now();
       setActiveChat(chatId);
       setHistory((prev) => [
         { id: chatId, title: content || attachedFile?.name || "New chat" },
@@ -121,17 +122,7 @@ export default function Dashboard() {
     setAttachedFile(null);
 
     // Demo response. Replace this with your AI API call.
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          role: "assistant",
-          content:
-            "I'm your AI assistant! This is a UI demo. Connect your AI API to generate real responses to your questions.",
-        },
-      ]);
-    }, 600);
+    handleAskQuery({input})
   }
 
   function handleKeyDown(e) {
@@ -144,6 +135,10 @@ export default function Dashboard() {
   const filteredHistory = history.filter((chat) =>
     chat.title.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+    useEffect(()=> {
+      initializedSocketConnection()
+    }, [])
 
   return (
     <div className="flex h-dvh overflow-hidden bg-white text-[#252525]">

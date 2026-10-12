@@ -1,10 +1,11 @@
 import { createBrowserRouter } from "react-router";
+import Dashboard from "../chat/pages/Dashboard";
 
 
 const router = createBrowserRouter([
     {
         path: "/",
-        element: <h1>hello</h1>
+        element: <Dashboard />
     }
 ])
 
