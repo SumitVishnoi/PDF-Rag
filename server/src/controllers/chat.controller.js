@@ -52,8 +52,6 @@ export const createFile = async (req, res) => {
       });
     }
 
-    console.log("File received:", req.file.originalname);
-
     // 3. Generate unique document ID
     const documentId = crypto.randomUUID();
 
@@ -67,8 +65,6 @@ export const createFile = async (req, res) => {
       folder: "/pdf-rag",
       useUniqueFileName: true,
     });
-
-    console.log("Uploaded to ImageKit:", uploadResult.url);
 
     // 5. Save file metadata in MongoDB
     const file = await chatModel.create({
@@ -93,7 +89,6 @@ export const createFile = async (req, res) => {
       await pdfResponse.arrayBuffer()
     );
 
-    console.log("PDF downloaded successfully");
 
     // 7. Parse PDF
     const parser = new PDFParse({
@@ -116,15 +111,8 @@ export const createFile = async (req, res) => {
       });
     }
 
-    console.log(
-      "Extracted characters:",
-      document.text.length
-    );
-
     // 8. Split text into chunks
     const texts = await splitter.splitText(document.text);
-
-    console.log("Total chunks:", texts.length);
 
     // 9. Generate embeddings
     const records = [];
@@ -149,17 +137,10 @@ export const createFile = async (req, res) => {
       });
     }
 
-    console.log(
-      "Generated embeddings:",
-      records.length
-    );
-
     // 10. Store vectors in Pinecone
     await index.upsert({
       records,
     });
-
-    console.log("Vectors inserted into Pinecone");
 
     // 11. Update processing status
     await chatModel.findByIdAndUpdate(file._id, {
@@ -222,9 +203,6 @@ export const askFromPDF = async (req, res) => {
       });
     }
 
-    console.log("Question:", question);
-    console.log("Document ID:", documentId);
-
     // 3. Convert question into embedding
     const queryEmbedding = await embeddings.embedQuery(
       question.trim()
@@ -268,11 +246,6 @@ ${match.metadata.text}`;
         message: "No relevant text found in this document",
       });
     }
-
-    console.log(
-      "Retrieved chunks:",
-      searchResult.matches.length
-    );
 
     // 7. Create prompt
     const prompt = `

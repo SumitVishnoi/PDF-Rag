@@ -1,569 +1,469 @@
-
-import { useState, useRef, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import {
-  PanelLeft,
-  Plus,
-  Search,
-  MessageSquare,
-  Sparkles,
-  Code2,
-  Lightbulb,
-  FileText,
-  Globe,
-  Mic,
+  AlertCircle,
   ArrowUp,
+  Check,
   ChevronDown,
-  MoreHorizontal,
-  Settings,
-  LogOut,
-  X,
-  Menu,
+  FileText,
+  LoaderCircle,
+  MessageCircle,
   Paperclip,
+  Sparkles,
+  Upload,
+  X,
 } from "lucide-react";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import { useChat } from "../hook/useChat";
-import { initializedSocketConnection } from "../service/chat.socket";
 
 const suggestions = [
-  {
-    icon: Code2,
-    title: "Write code",
-    description: "Build something with code",
-    prompt: "Help me build a modern React application",
-  },
-  {
-    icon: Lightbulb,
-    title: "Brainstorm ideas",
-    description: "Explore ideas and possibilities",
-    prompt: "Give me 5 creative AI project ideas",
-  },
-  {
-    icon: FileText,
-    title: "Write anything",
-    description: "Emails, content and more",
-    prompt: "Help me write a professional email",
-  },
-  {
-    icon: Globe,
-    title: "Learn something",
-    description: "Explain a topic simply",
-    prompt: "Explain how large language models work",
-  },
+  "Summarize this document",
+  "What are the main points?",
+  "Explain the key terms",
 ];
 
-const initialHistory = [
-  { id: 1, title: "React authentication flow" },
-  { id: 2, title: "Project ideas using AI" },
-  { id: 3, title: "Understanding system design" },
-  { id: 4, title: "Improve my resume" },
-];
+function formatBytes(bytes) {
+  if (!bytes) return "PDF document";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
-export default function Dashboard() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState([]);
-  const [activeChat, setActiveChat] = useState(null);
-  const [history, setHistory] = useState(initialHistory);
-  const [model, setModel] = useState("My AI");
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [attachedFile, setAttachedFile] = useState(null);
-  const {handleChat, handleAskQuery} = useChat()
+function getErrorMessage(error, action) {
+  const message = error.response?.data?.message;
 
-  const inputRef = useRef(null);
-  const bottomRef = useRef(null);
-  const fileRef = useRef(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  function newChat() {
-    setMessages([]);
-    setActiveChat(null);
-    setInput("");
-    setAttachedFile(null);
-    setMobileSidebarOpen(false);
-    inputRef.current?.focus();
+  if (!error.response) {
+    if (!error.isAxiosError && error.message) return error.message;
+    return "Could not reach the PDF service. Check that the backend is running and try again.";
   }
 
-  function openChat(chat) {
-    setActiveChat(chat.id);
-    setMessages([]);
-    setMobileSidebarOpen(false);
-    setInput("");
+  if (message === "Document is still being processed") {
+    return "Your PDF is still being prepared. Please wait a moment and try again.";
   }
 
-  function sendMessage(text = input) {
-    const content = text.trim();
-    if (!content && !attachedFile) return;
-
-    const userMessage = {
-      role: "user",
-      content:
-        content +
-        (attachedFile ? `\n📎 ${attachedFile.name}` : ""),
-    };
-
-    let chatId = activeChat;
-
-    if (!chatId) {
-      setActiveChat(chatId);
-      setHistory((prev) => [
-        { id: chatId, title: content || attachedFile?.name || "New chat" },
-        ...prev,
-      ]);
-    }
-
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-    setAttachedFile(null);
-
-    // Demo response. Replace this with your AI API call.
-    handleAskQuery({input})
+  if (message === "Document not found") {
+    return "This PDF is no longer available. Upload it again to continue.";
   }
 
-  function handleKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+  if (message === "No relevant information found in this document" ||
+      message === "No relevant text found in this document") {
+    return "I couldn’t find information about that in this PDF. Try asking in a different way.";
   }
 
-  const filteredHistory = history.filter((chat) =>
-    chat.title.toLowerCase().includes(searchTerm.toLowerCase())
+  if (message === "Could not extract text from this PDF") {
+    return "I couldn’t read any text in this PDF. It may be a scanned document without selectable text.";
+  }
+
+  if (message === "Only PDF files are allowed" || message === "No PDF file uploaded") {
+    return "Please choose a PDF file to upload.";
+  }
+
+  return message || `Something went wrong while ${action}. Please try again.`;
+}
+
+function MarkdownAnswer({ content }) {
+  const html = DOMPurify.sanitize(
+    marked.parse(content, { breaks: true, gfm: true }),
   );
 
-    useEffect(()=> {
-      initializedSocketConnection()
-    }, [])
+  return (
+    <div
+      className="markdown-answer"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+export default function Dashboard() {
+  const [documentInfo, setDocumentInfo] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [question, setQuestion] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState("");
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef(null);
+  const questionInputRef = useRef(null);
+  const bottomRef = useRef(null);
+  const { uploadDocument, askQuestion } = useChat();
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, asking]);
+
+  async function handleFile(file) {
+    if (!file || uploading || asking) return;
+
+    const isPdf = file.type === "application/pdf" ||
+      (!file.type && file.name.toLowerCase().endsWith(".pdf"));
+    if (!isPdf || !file.name.toLowerCase().endsWith(".pdf")) {
+      setError("Choose a PDF file to get started.");
+      return;
+    }
+
+    setError("");
+    setUploading(true);
+
+    try {
+      const result = await uploadDocument(file);
+      if (!result.success || !result.data?.documentId) {
+        throw new Error(result.message || "The PDF could not be prepared.");
+      }
+
+      setDocumentInfo({
+        documentId: result.data.documentId,
+        fileName: result.data.fileName || file.name,
+        totalChunks: result.data.totalChunks,
+        size: file.size,
+      });
+      setMessages([]);
+      setQuestion("");
+    } catch (uploadError) {
+      setError(getErrorMessage(uploadError, "preparing your PDF"));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleFileInput(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    void handleFile(file);
+  }
+
+  async function sendQuestion(text = question) {
+    const cleanQuestion = text.trim();
+    if (!cleanQuestion || !documentInfo || asking || uploading) return;
+
+    setError("");
+    setQuestion("");
+    setMessages((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: cleanQuestion,
+      },
+    ]);
+    setAsking(true);
+
+    try {
+      const result = await askQuestion({
+        documentId: documentInfo.documentId,
+        question: cleanQuestion,
+      });
+      if (!result.success || !result.data?.answer) {
+        throw new Error(result.message || "The answer was empty.");
+      }
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: result.data.answer,
+          sources: result.data.sources || [],
+        },
+      ]);
+    } catch (askError) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: getErrorMessage(askError, "answering your question"),
+          isError: true,
+        },
+      ]);
+    } finally {
+      setAsking(false);
+      questionInputRef.current?.focus();
+    }
+  }
+
+  function startNewDocument() {
+    setDocumentInfo(null);
+    setMessages([]);
+    setQuestion("");
+    setError("");
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    setDragActive(false);
+    void handleFile(event.dataTransfer.files?.[0]);
+  }
+
+  const canAsk = Boolean(
+    documentInfo && question.trim() && !asking && !uploading,
+  );
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-white text-[#252525]">
-      {/* Mobile overlay */}
-      {mobileSidebarOpen && (
-        <button
-          aria-label="Close sidebar"
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-        />
-      )}
+    <div className="app-shell">
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="PDF Companion home">
+          <span className="brand-mark"><Sparkles size={18} /></span>
+          <span>PDF Companion</span>
+        </a>
 
-      {/* Sidebar */}
-      <aside
-        className={`
-          fixed inset-y-0 left-0 z-50 flex w-[260px] flex-col
-          border-r border-black/[0.07] bg-[#f9f9f9]
-          transition-transform duration-200
-          md:relative md:z-auto md:translate-x-0
-          ${sidebarOpen ? "md:flex md:w-[260px]" : "md:hidden"}
-          ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
-        `}
-      >
-        {/* Brand */}
-        <div className="flex h-14 items-center justify-between px-3">
-          <button
-            onClick={newChat}
-            className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-black/5"
-          >
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#222] text-white">
-              <Sparkles size={18} />
-            </div>
-            <span className="text-[15px] font-semibold tracking-tight">
-              My AI
-            </span>
-          </button>
-
-          <button
-            onClick={() => {
-              setSidebarOpen(false);
-              setMobileSidebarOpen(false);
-            }}
-            className="rounded-lg p-2 text-gray-500 hover:bg-black/5"
-            aria-label="Close sidebar"
-          >
-            <PanelLeft size={19} />
-          </button>
-        </div>
-
-        {/* Sidebar actions */}
-        <div className="space-y-1 px-3 pt-3">
-          <button
-            onClick={newChat}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-black/[0.06]"
-          >
-            <Plus size={18} />
-            <span>New chat</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setSearchOpen(!searchOpen);
-              setSearchTerm("");
-            }}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-gray-600 hover:bg-black/[0.06]"
-          >
-            <Search size={18} />
-            <span>Search chats</span>
-          </button>
-
-          {searchOpen && (
-            <input
-              autoFocus
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search conversations..."
-              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-black/30"
-            />
+        <div className="topbar-actions">
+          {documentInfo && (
+            <button
+              className="button button-subtle new-document-button"
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || asking}
+            >
+              <Upload size={16} />
+              <span>Upload another PDF</span>
+            </button>
           )}
+          <input
+            ref={fileInputRef}
+            className="visually-hidden"
+            type="file"
+            accept="application/pdf,.pdf"
+            onChange={handleFileInput}
+            aria-label="Choose a PDF file"
+          />
+          <span className="privacy-note">
+            <Check size={14} /> Answers grounded in your PDF
+          </span>
         </div>
+      </header>
 
-        {/* Chat history */}
-        <div className="mt-7 flex-1 overflow-y-auto px-3">
-          <p className="mb-2 px-3 text-xs font-semibold text-gray-500">
-            Your chats
-          </p>
-
-          <div className="space-y-1">
-            {filteredHistory.map((chat) => (
-              <div key={chat.id} className="group flex items-center gap-1">
-                <button
-                  onClick={() => openChat(chat)}
-                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[13px] transition ${
-                    activeChat === chat.id
-                      ? "bg-black/[0.07]"
-                      : "hover:bg-black/[0.05]"
-                  }`}
-                >
-                  <MessageSquare
-                    size={16}
-                    className="shrink-0 text-gray-500"
-                  />
-                  <span className="truncate">{chat.title}</span>
-                </button>
-
-                <button
-                  aria-label="Delete chat"
-                  title="Delete chat"
-                  onClick={() => {
-                    setHistory((prev) =>
-                      prev.filter((item) => item.id !== chat.id)
-                    );
-                    if (activeChat === chat.id) newChat();
-                  }}
-                  className="mr-1 hidden rounded p-1.5 text-gray-500 hover:bg-black/10 group-hover:block"
-                >
-                  <MoreHorizontal size={16} />
-                </button>
-              </div>
-            ))}
-            {filteredHistory.length === 0 && (
-              <p className="px-3 py-3 text-xs text-gray-500">
-                No conversations found.
-              </p>
-            )}
+      <main className={`workspace${documentInfo ? " workspace-chat" : ""}`}>
+        {error && (
+          <div className="alert" role="alert">
+            <AlertCircle size={18} />
+            <span>{error}</span>
+            <button
+              type="button"
+              className="icon-button alert-dismiss"
+              onClick={() => setError("")}
+              aria-label="Dismiss message"
+            >
+              <X size={16} />
+            </button>
           </div>
-        </div>
+        )}
 
-        {/* Upgrade card */}
-        <div className="mx-3 mb-3 rounded-xl border border-black/[0.07] bg-white p-3">
-          <div className="flex items-center gap-2">
-            <Sparkles size={17} />
-            <span className="text-sm font-medium">More with AI</span>
+        {uploading && documentInfo && (
+          <div className="processing-banner" role="status">
+            <LoaderCircle className="spin" size={16} />
+            Preparing the new PDF. Your current document will stay available if
+            the upload doesn’t complete.
           </div>
-          <p className="mt-1.5 text-xs leading-5 text-gray-500">
-            Explore smarter ways to get things done.
-          </p>
-          <button className="mt-3 w-full rounded-lg bg-[#252525] py-2 text-xs font-medium text-white hover:bg-black/80">
-            Explore features
-          </button>
-        </div>
+        )}
 
-        {/* User profile */}
-        <div className="relative border-t border-black/[0.07] p-3">
-          {profileMenuOpen && (
-            <div className="absolute bottom-[70px] left-3 right-3 rounded-xl border border-black/10 bg-white p-1.5 shadow-xl">
-              <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-100">
-                <Settings size={16} /> Settings
-              </button>
-              <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-gray-100">
-                <LogOut size={16} /> Log out
-              </button>
-            </div>
-          )}
-
-          <button
-            onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-            className="flex w-full items-center gap-3 rounded-xl p-2 text-left hover:bg-black/[0.05]"
-          >
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#d9e6dc] text-sm font-semibold text-[#284c36]">
-              SV
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">Your account</p>
-              <p className="text-xs text-gray-500">Free plan</p>
-            </div>
-            <MoreHorizontal size={18} className="text-gray-500" />
-          </button>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <main className="relative flex min-w-0 flex-1 flex-col bg-white">
-        {/* Header */}
-        <header className="flex h-14 shrink-0 items-center justify-between px-3 sm:px-5">
-          <div className="flex items-center gap-2">
-            {!sidebarOpen && (
-              <button
-                onClick={() => setSidebarOpen(true)}
-                className="hidden rounded-lg p-2 hover:bg-gray-100 md:block"
-                aria-label="Open sidebar"
-              >
-                <PanelLeft size={19} />
-              </button>
-            )}
+        {!documentInfo ? (
+          <section className="welcome-panel" aria-labelledby="welcome-title">
+            <div className="eyebrow"><Sparkles size={15} /> ASK YOUR DOCUMENT</div>
+            <h1 id="welcome-title">Get to know your PDF.</h1>
+            <p className="welcome-copy">
+              Upload a document, then ask questions in plain language. Answers
+              are based on the contents of your PDF.
+            </p>
 
             <button
-              onClick={() => setMobileSidebarOpen(true)}
-              className="rounded-lg p-2 hover:bg-gray-100 md:hidden"
-              aria-label="Open sidebar"
+              className={`upload-dropzone${dragActive ? " drag-active" : ""}`}
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragActive(true);
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) {
+                  setDragActive(false);
+                }
+              }}
+              onDrop={handleDrop}
+              disabled={uploading}
+              aria-label="Choose or drop a PDF to upload"
             >
-              <Menu size={20} />
+              <span className="upload-icon">
+                {uploading ? (
+                  <LoaderCircle className="spin" size={24} />
+                ) : (
+                  <Upload size={24} />
+                )}
+              </span>
+              <span className="upload-title">
+                {uploading ? "Preparing your PDF…" : "Drop your PDF here"}
+              </span>
+              <span className="upload-copy">
+                {uploading
+                  ? "Uploading, extracting text, and getting it ready to search."
+                  : "or click to browse your files"}
+              </span>
+              {!uploading && <span className="file-type-note">PDF files only</span>}
             </button>
 
-            <div className="relative">
+            <div className="how-it-works">
+              <div><span>1</span> Upload a PDF</div>
+              <div><span>2</span> Ask a question</div>
+              <div><span>3</span> Explore a cited answer</div>
+            </div>
+          </section>
+        ) : (
+          <section className="chat-workspace" aria-label="PDF conversation">
+            <div className="document-card">
+              <div className="document-icon"><FileText size={20} /></div>
+              <div className="document-details">
+                <p className="document-name" title={documentInfo.fileName}>
+                  {documentInfo.fileName}
+                </p>
+                <p className="document-meta">
+                  {formatBytes(documentInfo.size)}
+                  {documentInfo.totalChunks
+                    ? ` · Ready to search · ${documentInfo.totalChunks} sections`
+                    : " · Ready to search"}
+                </p>
+              </div>
+              <span className="ready-badge"><Check size={13} /> Ready</span>
               <button
-                onClick={() => setModelMenuOpen(!modelMenuOpen)}
-                className="flex items-center gap-1.5 rounded-lg px-2 py-2 text-[15px] font-semibold hover:bg-gray-100"
+                type="button"
+                className="icon-button remove-document"
+                onClick={startNewDocument}
+                disabled={uploading || asking}
+                aria-label="Close this PDF"
+                title="Close this PDF"
               >
-                {model}
-                <ChevronDown size={16} className="text-gray-500" />
+                <X size={18} />
               </button>
+            </div>
 
-              {modelMenuOpen && (
-                <div className="absolute left-0 top-12 z-30 w-56 rounded-xl border border-black/10 bg-white p-1.5 shadow-lg">
-                  {["My AI", "My AI Fast", "My AI Thinking"].map((item) => (
-                    <button
-                      key={item}
-                      onClick={() => {
-                        setModel(item);
-                        setModelMenuOpen(false);
-                      }}
-                      className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm hover:bg-gray-100"
+            <div className="conversation">
+              {messages.length === 0 ? (
+                <div className="empty-conversation">
+                  <div className="assistant-mark"><Sparkles size={19} /></div>
+                  <h1>What would you like to know?</h1>
+                  <p>Ask a question about <strong>{documentInfo.fileName}</strong>.</p>
+                  <div className="suggestion-list">
+                    {suggestions.map((suggestion) => (
+                      <button
+                        type="button"
+                        className="suggestion-chip"
+                        key={suggestion}
+                        onClick={() => void sendQuestion(suggestion)}
+                        disabled={asking}
+                      >
+                        <MessageCircle size={15} />
+                        {suggestion}
+                        <ArrowUp size={14} className="suggestion-arrow" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="message-list">
+                  {messages.map((message) => (
+                    <article
+                      className={`message message-${message.role}`}
+                      key={message.id}
                     >
-                      {item}
-                      {model === item && (
-                        <span className="text-xs text-gray-500">Selected</span>
+                      {message.role === "assistant" && (
+                        <div className="assistant-mark message-mark">
+                          <Sparkles size={16} />
+                        </div>
                       )}
-                    </button>
+                      <div className="message-body">
+                        {message.role === "user" ? (
+                          <div className="user-bubble">{message.content}</div>
+                        ) : (
+                          <>
+                            <div className="message-author">
+                              {message.isError ? "Couldn’t answer" : "PDF Companion"}
+                            </div>
+                            <div className={message.isError ? "answer-error" : ""}>
+                              {message.isError
+                                ? message.content
+                                : <MarkdownAnswer content={message.content} />}
+                            </div>
+                            {message.sources?.length > 0 && (
+                              <details className="sources">
+                                <summary>
+                                  <FileText size={14} />
+                                  {message.sources.length} document
+                                  {message.sources.length === 1 ? " section" : " sections"} used
+                                  <ChevronDown size={14} />
+                                </summary>
+                                <div className="source-list">
+                                  {message.sources.map((source, index) => (
+                                    <div className="source-item" key={`${source.chunkIndex}-${index}`}>
+                                      <span className="source-label">
+                                        Section {source.chunkIndex ?? index + 1}
+                                      </span>
+                                      <p>{source.text}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </article>
                   ))}
+                  {asking && (
+                    <div className="message message-assistant" aria-live="polite">
+                      <div className="assistant-mark message-mark"><Sparkles size={16} /></div>
+                      <div className="message-body">
+                        <div className="message-author">PDF Companion</div>
+                        <div className="thinking-indicator">
+                          <LoaderCircle className="spin" size={16} />
+                          Looking through your document…
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <div ref={bottomRef} />
                 </div>
               )}
             </div>
-          </div>
 
-          <button className="flex items-center gap-2 rounded-full border border-black/10 px-3 py-2 text-xs font-medium hover:bg-gray-50 sm:text-sm">
-            <Sparkles size={15} />
-            <span>Share</span>
-          </button>
-        </header>
-
-        {/* Conversation area */}
-        <section className="flex min-h-0 flex-1 flex-col">
-          {messages.length === 0 ? (
-            <div className="flex flex-1 items-center justify-center overflow-y-auto px-4 pb-5">
-              <div className="w-full max-w-[720px]">
-                <div className="mb-8 text-center sm:mb-10">
-                  <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-black/10 bg-white shadow-sm">
-                    <Sparkles size={23} strokeWidth={1.7} />
-                  </div>
-                  <h1 className="text-[27px] font-semibold tracking-tight sm:text-[32px]">
-                    What can I help with?
-                  </h1>
-                  <p className="mt-2 text-sm text-gray-500">
-                    Ask anything. Let's figure it out together.
-                  </p>
-                </div>
-
-                {/* Suggestion cards */}
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {suggestions.map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.title}
-                        onClick={() => sendMessage(item.prompt)}
-                        className="group rounded-2xl border border-black/[0.09] p-4 text-left transition hover:border-black/20 hover:bg-[#fafafa]"
-                      >
-                        <div className="mb-3 flex items-center justify-between">
-                          <Icon
-                            size={20}
-                            strokeWidth={1.7}
-                            className="text-gray-600"
-                          />
-                          <ArrowUp
-                            size={16}
-                            className="text-gray-400 opacity-0 transition group-hover:opacity-100"
-                          />
-                        </div>
-                        <p className="text-sm font-medium">{item.title}</p>
-                        <p className="mt-1 text-xs text-gray-500">
-                          {item.description}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-              <div className="mx-auto max-w-[760px] space-y-7">
-                {messages.map((message) => (
-                  <div key={message.id}>
-                    {message.role === "user" ? (
-                      <div className="flex justify-end">
-                        <div className="max-w-[85%] whitespace-pre-wrap rounded-3xl bg-[#f4f4f4] px-4 py-3 text-[15px] leading-7 sm:max-w-[75%]">
-                          {message.content}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-start gap-3">
-                        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-black/10">
-                          <Sparkles size={17} />
-                        </div>
-                        <div className="min-w-0 flex-1 pt-1 text-[15px] leading-7">
-                          <p className="mb-1 font-semibold">My AI</p>
-                          <p className="whitespace-pre-wrap text-[#333]">
-                            {message.content}
-                          </p>
-                          <div className="mt-3 flex gap-1 text-gray-500">
-                            <button
-                              title="Copy response"
-                              onClick={() =>
-                                navigator.clipboard?.writeText(message.content)
-                              }
-                              className="rounded-lg p-2 hover:bg-gray-100"
-                            >
-                              <FileText size={16} />
-                            </button>
-                            <button
-                              title="More options"
-                              className="rounded-lg p-2 hover:bg-gray-100"
-                            >
-                              <MoreHorizontal size={16} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-                <div ref={bottomRef} />
-              </div>
-            </div>
-          )}
-
-          {/* Composer */}
-          <div className="shrink-0 px-3 pb-3 pt-2 sm:px-5 sm:pb-4">
-            <div className="mx-auto max-w-[760px]">
+            <div className="composer-wrap">
               <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  sendMessage();
+                className="composer"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void sendQuestion();
                 }}
-                className="rounded-[26px] border border-black/[0.12] bg-white px-3 pt-3 shadow-[0_2px_10px_rgba(0,0,0,0.04)] transition focus-within:border-black/25 focus-within:shadow-[0_3px_14px_rgba(0,0,0,0.07)] sm:px-4"
               >
-                {attachedFile && (
-                  <div className="mb-2 flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-xs">
-                    <Paperclip size={14} />
-                    <span className="flex-1 truncate">
-                      {attachedFile.name}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setAttachedFile(null)}
-                      aria-label="Remove attachment"
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
-                )}
-
                 <textarea
-                  ref={inputRef}
+                  ref={questionInputRef}
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendQuestion();
+                    }
+                  }}
+                  placeholder="Ask a question about this PDF…"
+                  aria-label="Ask a question about this PDF"
                   rows={1}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Message My AI..."
-                  aria-label="Message My AI"
-                  className="max-h-40 min-h-[42px] w-full resize-none bg-transparent px-1 py-2 text-[15px] leading-6 outline-none placeholder:text-gray-400"
+                  disabled={uploading || asking}
                 />
-
-                <div className="flex items-center justify-between gap-2 pb-1.5">
-                  <div className="flex items-center gap-1">
-                    <input
-                      ref={fileRef}
-                      type="file"
-                      className="hidden"
-                      onChange={(e) =>
-                        setAttachedFile(e.target.files?.[0] || null)
-                      }
-                    />
-                    <button
-                      type="button"
-                      title="Attach file"
-                      onClick={() => fileRef.current?.click()}
-                      className="flex h-9 w-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100"
-                    >
-                      <Plus size={21} />
-                    </button>
-
-                    <button
-                      type="button"
-                      className="hidden items-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 sm:flex"
-                    >
-                      <Globe size={15} />
-                      Search
-                    </button>
-                    <button
-                      type="button"
-                      className="hidden items-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 sm:flex"
-                    >
-                      <Lightbulb size={15} />
-                      Think
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      title="Voice input"
-                      className="flex h-9 w-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100"
-                    >
-                      <Mic size={19} />
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={!input.trim() && !attachedFile}
-                      aria-label="Send message"
-                      className="flex h-9 w-9 items-center justify-center rounded-full bg-[#252525] text-white transition hover:bg-black disabled:cursor-not-allowed disabled:bg-[#e5e5e5] disabled:text-gray-400"
-                    >
-                      <ArrowUp size={19} strokeWidth={2.5} />
-                    </button>
-                  </div>
+                <div className="composer-footer">
+                  <span><Paperclip size={14} /> Answers use this document only</span>
+                  <button
+                    type="submit"
+                    className="send-button"
+                    disabled={!canAsk}
+                    aria-label={asking ? "Getting answer" : "Send question"}
+                    title="Send question"
+                  >
+                    {asking ? <LoaderCircle className="spin" size={17} /> : <ArrowUp size={18} />}
+                  </button>
                 </div>
               </form>
-
-              <p className="mt-3 text-center text-[10px] leading-4 text-gray-500 sm:text-[11px]">
-                AI can make mistakes. Check important information.
+              <p className="composer-disclaimer">
+                AI can make mistakes. Check important details against your PDF.
               </p>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
       </main>
     </div>
   );

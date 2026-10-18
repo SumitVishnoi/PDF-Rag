@@ -1,16 +1,27 @@
-# React + Vite
+# PDF Companion
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+PDF Companion is a React frontend for the PDF question-answering API in `server/`.
+Upload a text-readable PDF, wait for indexing to finish, and ask questions about
+the document. Responses support Markdown and show the retrieved document
+sections used to answer.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Start the backend on port `3000` with its required service credentials and
+   database configured.
+2. In `client/`, run `npm install` and `npm run dev`.
+3. Open the Vite URL shown in the terminal.
 
-## React Compiler
+The API defaults to `http://localhost:3000`. Set `VITE_API_URL` in a client
+`.env` file to use a different backend origin.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## API contract
 
-## Expanding the ESLint configuration
+- `POST /api/chat/send` — multipart form data with a `file` field containing a
+  PDF. The frontend uses the returned `data.documentId` to identify the
+  processed document.
+- `POST /api/chat/ask` — JSON body `{ "documentId": "...", "question": "..." }`.
+  Successful responses include `data.answer` and `data.sources`.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+The upload endpoint processes and indexes the PDF before it responds, so larger
+files may take a little while to become ready for questions.
